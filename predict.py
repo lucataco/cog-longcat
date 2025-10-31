@@ -85,15 +85,34 @@ class Predictor(BasePredictor):
 
         self._dit_cls = LongCatVideoTransformer3DModel
 
-        if not CHECKPOINT_DIR.exists():
-            download_weights(MODEL_URL, WEIGHTS_ROOT)
+        checkpoint_dir = CHECKPOINT_DIR
+        if not checkpoint_dir.exists():
+            candidates = [
+                path
+                for path in WEIGHTS_ROOT.rglob("LongCat-Video")
+                if (path / "dit").exists()
+            ]
+            if candidates:
+                checkpoint_dir = candidates[0]
 
-        if not CHECKPOINT_DIR.exists():
+        if not checkpoint_dir.exists():
+            download_weights(MODEL_URL, WEIGHTS_ROOT)
+            candidates = [
+                path
+                for path in WEIGHTS_ROOT.rglob("LongCat-Video")
+                if (path / "dit").exists()
+            ]
+            if candidates:
+                checkpoint_dir = candidates[0]
+
+        if not checkpoint_dir.exists():
             raise FileNotFoundError(
                 "Expected LongCat-Video weights to be present after download, but the directory was not found."
             )
 
-        dit_dir = CHECKPOINT_DIR / "dit"
+        self.checkpoint_dir = checkpoint_dir
+
+        dit_dir = self.checkpoint_dir / "dit"
         if dit_dir.exists():
             available = sorted(f.name for f in dit_dir.iterdir())
             print("[LongCat] Found DIT weight files:", available)
@@ -101,18 +120,18 @@ class Predictor(BasePredictor):
         cp_split_hw = context_parallel_util.get_optimal_split(1)
 
         tokenizer = AutoTokenizer.from_pretrained(
-            str(CHECKPOINT_DIR), subfolder="tokenizer", torch_dtype=self.torch_dtype
+            str(self.checkpoint_dir), subfolder="tokenizer", torch_dtype=self.torch_dtype
         )
         text_encoder = UMT5EncoderModel.from_pretrained(
-            str(CHECKPOINT_DIR),
+            str(self.checkpoint_dir),
             subfolder="text_encoder",
             torch_dtype=self.torch_dtype,
         )
         vae = AutoencoderKLWan.from_pretrained(
-            str(CHECKPOINT_DIR), subfolder="vae", torch_dtype=self.torch_dtype
+            str(self.checkpoint_dir), subfolder="vae", torch_dtype=self.torch_dtype
         )
         scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
-            str(CHECKPOINT_DIR), subfolder="scheduler", torch_dtype=self.torch_dtype
+            str(self.checkpoint_dir), subfolder="scheduler", torch_dtype=self.torch_dtype
         )
         dit = self._load_dit(dit_dir, cp_split_hw)
 
@@ -127,13 +146,13 @@ class Predictor(BasePredictor):
 
         # Preload LoRA weights for later activation
         self.cfg_step_lora_available = False
-        cfg_lora_path = CHECKPOINT_DIR / "lora" / f"{CFG_STEP_LORA_KEY}.safetensors"
+        cfg_lora_path = self.checkpoint_dir / "lora" / f"{CFG_STEP_LORA_KEY}.safetensors"
         if cfg_lora_path.exists():
             self.pipe.dit.load_lora(cfg_lora_path, CFG_STEP_LORA_KEY)
             self.cfg_step_lora_available = True
 
         self.refinement_lora_available = False
-        refinement_lora_path = CHECKPOINT_DIR / "lora" / f"{REFINEMENT_LORA_KEY}.safetensors"
+        refinement_lora_path = self.checkpoint_dir / "lora" / f"{REFINEMENT_LORA_KEY}.safetensors"
         if refinement_lora_path.exists():
             self.pipe.dit.load_lora(refinement_lora_path, REFINEMENT_LORA_KEY)
             self.refinement_lora_available = True
@@ -315,7 +334,7 @@ class Predictor(BasePredictor):
         if not hasattr(self, "_dit_cls"):
             raise RuntimeError("DIT class reference not initialized.")
 
-        config = self._dit_cls.load_config(str(CHECKPOINT_DIR), subfolder="dit")
+        config = self._dit_cls.load_config(str(self.checkpoint_dir), subfolder="dit")
         config = dict(config)
         config.update(
             {
